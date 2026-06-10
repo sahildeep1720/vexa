@@ -82,7 +82,7 @@ cmd_add() {
   if [ -z "$meet_id" ]; then echo "add requires <meet_id>" >&2; exit 2; fi
 
   local time="10:30" tz="Asia/Kolkata" days="mon-fri"
-  local bot_name="Standup Bot" language="" once="" at=""
+  local bot_name="Standup Bot" language="" once="" at="" authed=""
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -91,6 +91,7 @@ cmd_add() {
       --days)     days="${2:?--days needs a value}"; shift 2 ;;
       --bot-name) bot_name="${2:?--bot-name needs a value}"; shift 2 ;;
       --language) language="${2:?--language needs a value}"; shift 2 ;;
+      --authenticated) authed="1"; shift ;;   # opt-in: only if the bot account is auto-admitted (host/org)
       --once)     once="1"; shift ;;
       --at)       at="${2:?--at needs a value}"; once="1"; shift 2 ;;
       *) echo "Unknown option: $1" >&2; exit 2 ;;
@@ -242,7 +243,7 @@ PY
   payload="$(
     MEET_ID="$meet_id" BOT_NAME="$bot_name" LANGUAGE="$language" \
     VEXA_API_KEY="$VEXA_API_KEY" EXECUTE_AT="$execute_at" CRON="$cron" \
-    LOCAL_TIME="$time" MEET_TZ="$tz" ONCE="$once" \
+    LOCAL_TIME="$time" MEET_TZ="$tz" ONCE="$once" AUTHED="$authed" \
     python3 <<'PY'
 import os, json, time, hashlib
 
@@ -255,12 +256,19 @@ cron    = os.environ.get("CRON","")
 local_t = os.environ["LOCAL_TIME"]
 tz      = os.environ["MEET_TZ"]
 once    = os.environ.get("ONCE","")
+authed  = os.environ.get("AUTHED","")
 
 body = {
     "platform": "google_meet",
     "native_meeting_id": meet_id,
     "bot_name": bot_name,
 }
+# Default = anonymous (the bot knocks; a human admits) — the mode that works on a
+# clean IP. --authenticated is opt-in and ONLY helps when the bot's Google account
+# is auto-admitted by the meeting (host / same Workspace org / quick-access);
+# otherwise the authenticated flow times out waiting for a "Join now" button.
+if authed:
+    body["authenticated"] = True
 if language:
     body["language"] = language
 
