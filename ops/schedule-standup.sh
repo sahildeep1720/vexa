@@ -264,9 +264,9 @@ body = {
     "bot_name": bot_name,
 }
 # Default = anonymous (the bot knocks; a human admits) — the mode that works on a
-# clean IP. --authenticated is opt-in and ONLY helps when the bot's Google account
-# is auto-admitted by the meeting (host / same Workspace org / quick-access);
-# otherwise the authenticated flow times out waiting for a "Join now" button.
+# clean IP. --authenticated is opt-in and ONLY helps when the bot account is
+# auto-admitted by the meeting (host, same Workspace org, or quick-access);
+# otherwise the authenticated flow times out waiting for the join button.
 if authed:
     body["authenticated"] = True
 if language:
