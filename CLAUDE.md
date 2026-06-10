@@ -137,27 +137,31 @@ mode's matrix and writes JSON reports; `make -C tests3 report` aggregates them. 
 
 ---
 
-## 4. Azure overlay (local addition, kept separate from core)
+## 4. OpenRouter overlay (local addition, kept separate from core)
 
-A `docker-compose.azure.yml` overlay adds two services that integrate **only via env + the
-hooks above — zero edits to Vexa core** (see `CHANGES.md`):
+A `docker-compose.openrouter.yml` overlay adds two services that integrate **only via env +
+the hooks above — zero edits to Vexa core** (see `CHANGES.md`):
 
-- `services/azure-transcriber/` — OpenAI-compatible (`/v1/audio/transcriptions`) facade;
-  multi-backend via `TRANSCRIBER_MODEL` (capability table in `app/providers/`). On branch
-  `feat/openrouter` the **default is `openrouter`** (text-only → synthesized single segment,
-  no word timestamps); Azure `gpt-4o-transcribe` etc. remain selectable. Drop-in for
-  `transcription-service`; wired by `TRANSCRIPTION_SERVICE_URL` in `.env`.
+- `services/transcriber/` — OpenAI-compatible (`/v1/audio/transcriptions`) facade over
+  OpenRouter STT. OpenRouter returns **text only** (no word/segment timestamps), so the
+  adapter synthesizes a **single full-chunk segment** → attribution is chunk-level.
+  `OPENROUTER_BASE_URL` lets any OpenAI-compatible proxy stand in. Drop-in for
+  `transcription-service`; swap in via `TRANSCRIPTION_SERVICE_URL` in `.env`.
 - `services/standup-extractor/` — FastAPI service triggered by `POST_MEETING_HOOKS`; pulls the
-  transcript via the internal endpoint, extracts per-person standup JSON via `MODEL_MODE`
-  (`openrouter` default → `openai/gpt-5.5` strict `json_schema`; `azure` / `openai_compatible`
-  alternates), pushes to a stubbed Kanban client.
+  transcript via the internal endpoint, extracts per-person standup as **strict JSON in English**
+  (OpenRouter `gpt-5.5`; Hindi/Hinglish translated, names never translated), pushes to a stubbed
+  Kanban client.
+- `ops/` tooling — `stack.sh` is the single entrypoint (`up`, `up-lean` lean profile of
+  11 containers dropping dashboard + mcp, `down`); `schedule-standup.sh` registers daily
+  auto-join crons with `runtime-api`'s scheduler. The scheduler needs `croniter`, which the
+  core `runtime-api` image lacks, so the overlay runs a **derived image** built from
+  `ops/runtime-api-cron.Dockerfile` (`FROM vexaai/runtime-api` + `pip install croniter`) —
+  **zero core files edited**.
 
 ```bash
-# --env-file is required: compose reads .env from the first -f file's dir
-# (deploy/compose), not the repo root — mirrors Vexa's Makefile.
-docker compose --env-file .env \
-  -f deploy/compose/docker-compose.yml -f docker-compose.azure.yml up -d --pull=missing
-cd services/azure-transcriber && pytest tests/ -v   # unit tests (no Azure creds needed)
+ops/stack.sh up-lean                          # lean profile (11 containers); `ops/stack.sh up` for full
+cd services/transcriber && pytest tests/ -v   # unit tests (no provider creds needed)
 ```
 
-New env vars are documented in `.env.azure.example`; design rationale in each service README.
+New env vars are documented in `.env.openrouter.example`; design rationale in each service
+README and in `CHANGES.md`.

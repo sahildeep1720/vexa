@@ -22,7 +22,7 @@ def meeting_field(envelope: Dict[str, Any], key: str) -> Any:
     return ((envelope.get("data") or {}).get("meeting") or {}).get(key)
 
 
-# Azure OpenAI Structured Outputs rules: every property in `required`,
+# OpenAI Structured Outputs rules: every property in `required`,
 # additionalProperties:false on every object. Per-person yesterday/today/blockers.
 STANDUP_JSON_SCHEMA: Dict[str, Any] = {
     "type": "object",

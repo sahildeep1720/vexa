@@ -1,4 +1,4 @@
-"""Translate Azure transcription responses into Vexa's verbose_json contract.
+"""Translate the transcription backend's response into Vexa's verbose_json contract.
 
 Vexa's bot (services/vexa-bot/core/src/services/transcription-client.ts) expects:
 
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-# Minimal full-name -> ISO-639-1 map for languages Azure/Whisper may return as
+# Minimal full-name -> ISO-639-1 map for languages the backend may return as
 # full names. 2-letter codes pass through; "en-US" -> "en"; unknowns fall back to
 # the requested language or 'en'. Vexa validates segment.language against ISO
 # faster-whisper codes downstream, so non-ISO values would be rejected.
@@ -52,106 +52,6 @@ def _envelope(text, language, language_probability, duration, segments) -> Dict[
         "duration": float(duration or 0.0),
         "segments": segments or [],
     }
-
-
-def from_openai_verbose(data: Dict[str, Any], *, fallback_language: Optional[str],
-                        default_language_probability: float) -> Dict[str, Any]:
-    """gpt-4o-transcribe / gpt-4o-mini-transcribe / whisper verbose_json -> Vexa."""
-    segments: List[Dict[str, Any]] = []
-    for s in data.get("segments") or []:
-        seg: Dict[str, Any] = {
-            "start": float(s.get("start") or 0.0),
-            "end": float(s.get("end") or 0.0),
-            "text": s.get("text") or "",
-        }
-        for k in ("avg_logprob", "no_speech_prob", "compression_ratio"):
-            if s.get(k) is not None:
-                seg[k] = s[k]
-        words = s.get("words")
-        if words:
-            seg["words"] = [
-                {
-                    "word": w.get("word", ""),
-                    "start": float(w.get("start") or 0.0),
-                    "end": float(w.get("end") or 0.0),
-                    "probability": float(w.get("probability") if w.get("probability") is not None else 1.0),
-                }
-                for w in words
-            ]
-        segments.append(seg)
-
-    duration = data.get("duration")
-    if duration is None and segments:
-        duration = segments[-1]["end"]
-    text = data.get("text")
-    if not text and segments:
-        text = " ".join(seg["text"].strip() for seg in segments).strip()
-    lang_prob = data.get("language_probability")
-    if lang_prob is None:
-        lang_prob = default_language_probability
-    return _envelope(text, normalize_language(data.get("language"), fallback_language),
-                     lang_prob, duration, segments)
-
-
-def from_diarized(data: Dict[str, Any], *, fallback_language: Optional[str],
-                  default_language_probability: float) -> Dict[str, Any]:
-    """gpt-4o-transcribe-diarize ``diarized_json`` -> Vexa.
-
-    Segment-level only (no word timestamps). The Azure ``speaker`` label is
-    deliberately NOT propagated: Vexa does its own speaker attribution and
-    ignores any transcriber-supplied speaker, so emitting it is pointless.
-    """
-    segments = [
-        {
-            "start": float(s.get("start") or 0.0),
-            "end": float(s.get("end") or 0.0),
-            "text": s.get("text") or "",
-        }
-        for s in (data.get("segments") or [])
-    ]
-    duration = data.get("duration")
-    if duration is None and segments:
-        duration = segments[-1]["end"]
-    text = data.get("text") or " ".join(s["text"].strip() for s in segments).strip()
-    return _envelope(text, normalize_language(data.get("language"), fallback_language),
-                     default_language_probability, duration, segments)
-
-
-def from_azure_speech(data: Dict[str, Any], *, fallback_language: Optional[str],
-                      default_language_probability: float) -> Dict[str, Any]:
-    """Azure AI Speech fast transcription (MAI-Transcribe-1) -> Vexa.
-
-    Azure returns ms offsets + phrases/words; we convert to float seconds.
-    """
-    segments: List[Dict[str, Any]] = []
-    locale = None
-    for p in data.get("phrases") or []:
-        start = (p.get("offsetMilliseconds") or 0) / 1000.0
-        end = start + (p.get("durationMilliseconds") or 0) / 1000.0
-        seg: Dict[str, Any] = {"start": start, "end": end, "text": p.get("text") or ""}
-        locale = locale or p.get("locale")
-        words_in = p.get("words") or []
-        if words_in:
-            seg["words"] = [
-                {
-                    "word": w.get("text", ""),
-                    "start": (w.get("offsetMilliseconds") or 0) / 1000.0,
-                    "end": ((w.get("offsetMilliseconds") or 0) + (w.get("durationMilliseconds") or 0)) / 1000.0,
-                    "probability": 1.0,
-                }
-                for w in words_in
-            ]
-        segments.append(seg)
-
-    combined = data.get("combinedPhrases") or []
-    text = " ".join(c.get("text", "") for c in combined).strip()
-    if not text:
-        text = " ".join(s["text"].strip() for s in segments).strip()
-    duration = (data.get("durationMilliseconds") or 0) / 1000.0
-    if not duration and segments:
-        duration = segments[-1]["end"]
-    return _envelope(text, normalize_language(locale, fallback_language),
-                     default_language_probability, duration, segments)
 
 
 def from_openrouter_text(text: Optional[str], *, duration: float, fallback_language: Optional[str],

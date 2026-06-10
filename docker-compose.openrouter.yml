@@ -1,59 +1,61 @@
-# docker-compose.azure.yml — overlay adding the Azure transcription adapter +
-# standup-extractor to a standard Vexa stack.
+# docker-compose.openrouter.yml — overlay adding the OpenRouter transcription
+# adapter + standup-extractor to a standard Vexa stack, plus a derived
+# runtime-api image that fixes the missing-croniter cron re-arm bug.
 #
-# Usage (from repo root; --env-file is REQUIRED — compose reads .env from the
-# FIRST -f file's dir (deploy/compose), not the repo root, so pass it explicitly):
+# BLESSED ENTRYPOINT: ops/stack.sh (it wires --env-file and both -f files for
+# you; raw `docker compose` works too if you mirror its flags). Example:
+#
+#   ops/stack.sh up-lean        # or: ops/stack.sh up
+#
+# Raw form (--env-file is REQUIRED — compose reads .env from the FIRST -f
+# file's dir, deploy/compose, NOT the repo root, so pass it explicitly; the
+# compose PROJECT DIR is also that first dir, which is why relative build
+# contexts below resolve against deploy/compose):
+#
 #   docker compose --env-file .env \
-#     -f deploy/compose/docker-compose.yml -f docker-compose.azure.yml up -d --pull=missing
+#     -f deploy/compose/docker-compose.yml -f docker-compose.openrouter.yml up -d --pull=missing
 #
-# Repointing Vexa at these services is done entirely in .env (see .env.azure.example):
-#   TRANSCRIPTION_SERVICE_URL=http://azure-transcriber:8085/v1/audio/transcriptions
-#   TRANSCRIPTION_SERVICE_TOKEN=<token azure-transcriber accepts>
+# Repointing Vexa at these services is done entirely in .env (see
+# .env.openrouter.example):
+#   TRANSCRIPTION_SERVICE_URL=http://transcriber:8085/v1/audio/transcriptions
+#   TRANSCRIPTION_SERVICE_TOKEN=<token the transcriber accepts>
 #   POST_MEETING_HOOKS=http://standup-extractor:8086/hooks/meeting-completed
-#
-# meeting-api already reads those three via ${...}, so NO Vexa core compose/service
-# edits are required. Keep LOCAL_TRANSCRIPTION unset (we replace it).
+# meeting-api already reads those three via ${...}, so NO Vexa core compose or
+# service files are edited.
 services:
-  azure-transcriber:
+  transcriber:
     build:
-      # Relative paths in compose resolve against the FIRST -f file's dir
-      # (deploy/compose), so ../.. == repo root — same pattern as meeting-api.
+      # Relative paths resolve against the FIRST -f file's dir (deploy/compose),
+      # so ../.. == repo root — same pattern as the core meeting-api service.
       context: ../..
-      dockerfile: services/azure-transcriber/Dockerfile
-    image: vexa-azure/azure-transcriber:local
+      dockerfile: services/transcriber/Dockerfile
+    image: vexa-openrouter/transcriber:local
+    init: true
     mem_limit: 512m
     ports:
-      - "${AZURE_TRANSCRIBER_HOST_PORT:-8085}:8085"
+      - "${TRANSCRIBER_HOST_PORT:-8085}:8085"
     environment:
       - TRANSCRIBER_MODEL=${TRANSCRIBER_MODEL:-openrouter}
-      # OpenRouter (default backend). STT is text-only -> single full-chunk segment.
+      # OpenRouter backend. STT is text-only -> single full-chunk segment.
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       - OPENROUTER_TRANSCRIBE_MODEL=${OPENROUTER_TRANSCRIBE_MODEL:-openai/gpt-4o-transcribe}
       - OPENROUTER_REFERER=${OPENROUTER_REFERER:-}
       - OPENROUTER_TITLE=${OPENROUTER_TITLE:-}
-      # Azure backends (only if TRANSCRIBER_MODEL is an Azure model)
-      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
-      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
-      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2025-04-01-preview}
-      # Deployment names (Azure 'model' field = deployment name). Single default + overrides.
-      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_TRANSCRIBE_DEPLOYMENT:-gpt-4o-transcribe}
-      - AZURE_OPENAI_TRANSCRIBE_DEPLOYMENT=${AZURE_OPENAI_TRANSCRIBE_DEPLOYMENT:-}
-      - AZURE_OPENAI_TRANSCRIBE_MINI_DEPLOYMENT=${AZURE_OPENAI_TRANSCRIBE_MINI_DEPLOYMENT:-}
-      - AZURE_OPENAI_TRANSCRIBE_DIARIZE_DEPLOYMENT=${AZURE_OPENAI_TRANSCRIBE_DIARIZE_DEPLOYMENT:-}
-      - AZURE_OPENAI_WHISPER_DEPLOYMENT=${AZURE_OPENAI_WHISPER_DEPLOYMENT:-}
-      - AZURE_USE_AAD=${AZURE_USE_AAD:-false}
-      # Azure AI Speech (only used when TRANSCRIBER_MODEL=MAI-Transcribe-1)
-      - AZURE_SPEECH_ENDPOINT=${AZURE_SPEECH_ENDPOINT:-}
-      - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY:-}
-      - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-}
-      - AZURE_SPEECH_API_VERSION=${AZURE_SPEECH_API_VERSION:-2025-10-15}
       # Inbound auth: falls back to the same token the bot already carries.
       - INBOUND_AUTH_TOKEN=${INBOUND_AUTH_TOKEN:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - DEFAULT_LANGUAGE_PROBABILITY=${DEFAULT_LANGUAGE_PROBABILITY:-1.0}
-      - REQUEST_TIMEOUT_S=${AZURE_TRANSCRIBER_TIMEOUT_S:-25}
+      - REQUEST_TIMEOUT_S=${TRANSCRIBER_TIMEOUT_S:-25}
+      - MAX_RETRIES=${MAX_RETRIES:-2}
+      - RETRY_BASE_MS=${RETRY_BASE_MS:-500}
+      - BUSY_RETRY_AFTER_S=${BUSY_RETRY_AFTER_S:-1}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     networks:
       - vexa
     restart: unless-stopped
@@ -62,43 +64,69 @@ services:
     build:
       context: ../..
       dockerfile: services/standup-extractor/Dockerfile
-    image: vexa-azure/standup-extractor:local
+    image: vexa-openrouter/standup-extractor:local
+    init: true
     mem_limit: 512m
+    # NO depends_on: standup-extractor is triggered by meeting-api's
+    # POST_MEETING_HOOKS and pulls the transcript from meeting-api's internal
+    # endpoint — it never calls the transcriber, so a dep would only create a
+    # false ordering constraint.
     ports:
       - "${STANDUP_EXTRACTOR_HOST_PORT:-8086}:8086"
     environment:
-      - MODEL_MODE=${MODEL_MODE:-openrouter}
-      # OpenRouter (default). Reuses the same OPENROUTER_API_KEY as the transcriber.
+      # One .env, two services, distinct OpenRouter models: the transcriber
+      # uses OPENROUTER_TRANSCRIBE_MODEL for STT; this service uses a chat model.
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       - OPENROUTER_MODEL=${OPENROUTER_CHAT_MODEL:-openai/gpt-5.5}
       - OPENROUTER_REQUIRE_PARAMETERS=${OPENROUTER_REQUIRE_PARAMETERS:-true}
       - OPENROUTER_REFERER=${OPENROUTER_REFERER:-}
       - OPENROUTER_TITLE=${OPENROUTER_TITLE:-}
-      # Azure (only when MODEL_MODE=azure)
-      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
-      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
-      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_CHAT_API_VERSION:-2025-04-01-preview}
-      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_CHAT_DEPLOYMENT:-gpt-5.5}
       - REASONING_MODEL=${REASONING_MODEL:-true}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-}
       - MAX_COMPLETION_TOKENS=${MAX_COMPLETION_TOKENS:-2000}
-      - AZURE_USE_AAD=${AZURE_USE_AAD:-false}
-      # OpenAI-compatible proxy (only when MODEL_MODE=openai_compatible)
-      - OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}
-      - OPENAI_COMPAT_API_KEY=${OPENAI_COMPAT_API_KEY:-}
-      - OPENAI_COMPAT_MODEL=${OPENAI_COMPAT_MODEL:-gpt-5.5}
       # Vexa internal transcript fetch — must match meeting-api's INTERNAL_API_SECRET.
       - MEETING_API_INTERNAL_URL=${MEETING_API_INTERNAL_URL:-http://meeting-api:8080}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - TEAM_ROSTER=${TEAM_ROSTER:-}
       - KANBAN_API_URL=${KANBAN_API_URL:-}
       - KANBAN_API_KEY=${KANBAN_API_KEY:-}
+      - REQUEST_TIMEOUT_S=${EXTRACTOR_TIMEOUT_S:-60}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    depends_on:
-      - azure-transcriber
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     networks:
       - vexa
     restart: unless-stopped
+
+  # ===========================================================================
+  # runtime-api OVERRIDE — adds croniter to fix recurring (cron) scheduler jobs.
+  #
+  # WHY: the core vexaai/runtime-api image installs `pip install ".[kubernetes]"`
+  # (services/runtime-api/Dockerfile). croniter lives ONLY in the separate
+  # `[cron]` extra (services/runtime-api/pyproject.toml), so it is absent from
+  # the shipped image. scheduler.py re-arms recurring jobs in _process_job() via
+  # `from croniter import croniter` AFTER a job completes — with croniter
+  # missing that import raises, the re-arm is swallowed, and a job carrying
+  # metadata.cron fires exactly ONCE then never re-schedules. The standup
+  # scheduler (ops/schedule-standup.sh) depends on that re-arm to keep the daily
+  # bot-join chain alive, so we build a derived image that simply `pip install`s
+  # croniter on top of the published runtime-api. ZERO core FILES are edited —
+  # the fix is an additive layer in ops/runtime-api-cron.Dockerfile.
+  #
+  # Everything else (env, volumes, group_add, ports, depends_on, networks)
+  # MERGES from the base service block — do NOT repeat it here.
+  # ===========================================================================
+  runtime-api:
+    build:
+      context: ../..
+      dockerfile: ops/runtime-api-cron.Dockerfile
+      args:
+        BASE_IMAGE: "vexaai/runtime-api:${IMAGE_TAG:-latest}"
+    image: vexa-openrouter/runtime-api-cron:local
 
 networks:
   vexa:

@@ -1,5 +1,3 @@
 fastapi>=0.128.0
-uvicorn[standard]>=0.39.0
+uvicorn>=0.39.0
 httpx>=0.27.0
-# Optional — only needed if AZURE_USE_AAD=true (Entra ID / managed identity):
-# azure-identity>=1.17.0

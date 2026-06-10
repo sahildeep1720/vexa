@@ -1,9 +1,14 @@
 """Extract per-person standup data (yesterday/today/blockers) as strict JSON.
 
-Default backend is Azure OpenAI ``gpt-5.5`` — a REASONING model, so we send
-``max_completion_tokens`` and DO NOT send ``temperature``. Structured Outputs
-(``response_format=json_schema``, strict) guarantees schema adherence. A
-``MODEL_MODE=openai_compatible`` path targets a LiteLLM-style proxy.
+The backend is OpenRouter (``openai/gpt-5.5`` by default) — a REASONING model, so
+we send ``max_tokens`` and DO NOT send ``temperature``. Structured Outputs
+(``response_format=json_schema``, strict) guarantees schema adherence, and
+``provider:{require_parameters:true}`` keeps OpenRouter from routing to a provider
+that silently drops it.
+
+``OPENROUTER_BASE_URL`` accepts any OpenAI-compatible ``/chat/completions`` proxy
+(e.g. a LiteLLM gateway); set ``OPENROUTER_REQUIRE_PARAMETERS=false`` for proxies
+that reject the ``provider`` field.
 """
 from __future__ import annotations
 
@@ -25,7 +30,13 @@ _SYSTEM = (
     "and any blockers/impediments. Use ONLY information stated in the transcript — "
     "never invent items. Attribute statements to the speaker who made them, using the "
     "names as they appear in the transcript. If a participant did not mention a "
-    "category, return an empty list for it. Omit participants who did not give an update."
+    "category, return an empty list for it. Omit participants who did not give an update. "
+    "The meeting may be spoken in Hindi, English, or mixed Hinglish (including Devanagari "
+    "script). ALWAYS write the standup items (yesterday/today/blockers) in clear, natural "
+    "ENGLISH — translate faithfully without adding or dropping information. NEVER translate "
+    "or transliterate speaker names: keep each person's name exactly as it appears in the "
+    "transcript. Keep technical terms, product names, library names, and ticket IDs verbatim. "
+    "Handle code-switching naturally."
 )
 
 
@@ -43,95 +54,63 @@ def build_messages(transcript_text: str, participants: List[str]) -> List[Dict[s
     ]
 
 
+def build_headers(settings: Settings) -> Dict[str, str]:
+    """Auth + content headers for the OpenRouter (OpenAI-compatible) chat call.
+
+    Adds OpenRouter's optional app-attribution headers (HTTP-Referer / X-Title)
+    only when configured; harmless to omit against a plain proxy.
+    """
+    s = settings
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {s.openrouter_api_key}",
+    }
+    if s.openrouter_referer:
+        headers["HTTP-Referer"] = s.openrouter_referer
+    if s.openrouter_title:
+        headers["X-Title"] = s.openrouter_title
+    return headers
+
+
+def build_request_body(settings: Settings, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Chat-completions body with strict structured outputs.
+
+    gpt-5.5's OpenRouter endpoint advertises ``max_tokens``. The ``provider`` block
+    is sent only when ``openrouter_require_parameters`` is on (some proxies reject
+    it), and ``temperature`` only for non-reasoning models that set one.
+    """
+    s = settings
+    body: Dict[str, Any] = {
+        "model": s.openrouter_model,
+        "messages": messages,
+        "response_format": response_format(),
+        "max_tokens": s.max_completion_tokens,
+    }
+    if s.openrouter_require_parameters:
+        # Only route to a provider that honors response_format, so strict JSON
+        # isn't silently dropped (OpenRouter default require_parameters is false).
+        body["provider"] = {"require_parameters": True}
+    if not s.reasoning_model and s.llm_temperature is not None:
+        body["temperature"] = s.llm_temperature  # reasoning models reject temperature
+    return body
+
+
 class StandupExtractor:
     def __init__(self, settings: Settings, http: httpx.AsyncClient):
         self.settings = settings
         self.http = http
 
     async def extract(self, transcript_text: str, participants: List[str]) -> Dict[str, Any]:
-        messages = build_messages(transcript_text, participants)
-        mode = self.settings.model_mode
-        if mode == "openrouter":
-            content = await self._call_openrouter(messages)
-        elif mode == "openai_compatible":
-            content = await self._call_openai_compatible(messages)
-        else:
-            content = await self._call_azure(messages)
-        return _parse_json(content)
-
-    async def _call_openrouter(self, messages: List[Dict[str, str]]) -> str:
         s = self.settings
         if not s.openrouter_api_key:
             raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        messages = build_messages(transcript_text, participants)
         url = f"{s.openrouter_base_url.rstrip('/')}/chat/completions"
-        body: Dict[str, Any] = {
-            "model": s.openrouter_model,
-            "messages": messages,
-            "response_format": response_format(),
-            # gpt-5.5's OpenRouter endpoint advertises max_tokens.
-            "max_tokens": s.max_completion_tokens,
-        }
-        if s.openrouter_require_parameters:
-            # Only route to a provider that honors response_format, so strict JSON
-            # isn't silently dropped (OpenRouter default require_parameters is false).
-            body["provider"] = {"require_parameters": True}
-        if not s.reasoning_model and s.llm_temperature is not None:
-            body["temperature"] = s.llm_temperature  # reasoning models reject temperature
-        headers = {"Content-Type": "application/json",
-                   "Authorization": f"Bearer {s.openrouter_api_key}"}
-        if s.openrouter_referer:
-            headers["HTTP-Referer"] = s.openrouter_referer
-        if s.openrouter_title:
-            headers["X-Title"] = s.openrouter_title
+        headers = build_headers(s)
+        body = build_request_body(s, messages)
         resp = await self.http.post(url, headers=headers, json=body, timeout=s.request_timeout_s)
         resp.raise_for_status()
-        return _content_from_chat(resp.json())
-
-    async def _call_azure(self, messages: List[Dict[str, str]]) -> str:
-        s = self.settings
-        if not s.azure_openai_endpoint:
-            raise RuntimeError("AZURE_OPENAI_ENDPOINT is not configured")
-        url = (f"{s.azure_openai_endpoint.rstrip('/')}/openai/deployments/"
-               f"{s.azure_openai_deployment}/chat/completions"
-               f"?api-version={s.azure_openai_api_version}")
-        body: Dict[str, Any] = {
-            "messages": messages,
-            "response_format": response_format(),
-            "max_completion_tokens": s.max_completion_tokens,  # reasoning models reject max_tokens
-        }
-        if not s.reasoning_model and s.llm_temperature is not None:
-            body["temperature"] = s.llm_temperature
-        headers = {"Content-Type": "application/json"}
-        if s.azure_use_aad:
-            headers["Authorization"] = f"Bearer {await _aad_token()}"
-        else:
-            if not s.azure_openai_api_key:
-                raise RuntimeError("AZURE_OPENAI_API_KEY is not configured")
-            headers["api-key"] = s.azure_openai_api_key
-
-        resp = await self.http.post(url, headers=headers, json=body, timeout=s.request_timeout_s)
-        resp.raise_for_status()
-        return _content_from_chat(resp.json())
-
-    async def _call_openai_compatible(self, messages: List[Dict[str, str]]) -> str:
-        s = self.settings
-        if not s.openai_compat_base_url:
-            raise RuntimeError("OPENAI_COMPAT_BASE_URL is not configured")
-        url = f"{s.openai_compat_base_url.rstrip('/')}/chat/completions"
-        body: Dict[str, Any] = {
-            "model": s.openai_compat_model,
-            "messages": messages,
-            "response_format": response_format(),
-            "max_tokens": s.max_completion_tokens,
-        }
-        if s.llm_temperature is not None:
-            body["temperature"] = s.llm_temperature
-        headers = {"Content-Type": "application/json"}
-        if s.openai_compat_api_key:
-            headers["Authorization"] = f"Bearer {s.openai_compat_api_key}"
-        resp = await self.http.post(url, headers=headers, json=body, timeout=s.request_timeout_s)
-        resp.raise_for_status()
-        return _content_from_chat(resp.json())
+        return _parse_json(_content_from_chat(resp.json()))
 
 
 def _content_from_chat(payload: Dict[str, Any]) -> str:
@@ -153,14 +132,3 @@ def _parse_json(content: str) -> Dict[str, Any]:
     if not isinstance(data, dict) or "people" not in data:
         raise RuntimeError(f"LLM output missing 'people': {str(data)[:300]}")
     return data
-
-
-async def _aad_token() -> str:
-    try:
-        from azure.identity import DefaultAzureCredential  # optional dependency
-    except ImportError as e:  # pragma: no cover
-        raise RuntimeError("AZURE_USE_AAD=true but azure-identity is not installed") from e
-    import asyncio
-    cred = DefaultAzureCredential()
-    token = await asyncio.to_thread(cred.get_token, "https://ai.azure.com/.default")
-    return token.token

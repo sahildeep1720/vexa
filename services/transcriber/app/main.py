@@ -1,13 +1,14 @@
-"""azure-transcriber — OpenAI-compatible transcription facade over Azure.
+"""transcriber — OpenAI-compatible transcription facade over OpenRouter.
 
 A drop-in replacement for Vexa's transcription-service: identical inbound contract
 (``POST /v1/audio/transcriptions``, multipart) and identical outbound verbose_json,
 so Vexa talks to it exactly as it talks to the bundled WhisperLive service. The
-backend Azure model is chosen by ``TRANSCRIBER_MODEL`` (one-line env swap). The
-inbound ``model`` form field (Vexa always sends ``whisper-1``) is ignored.
+backend OpenRouter model is chosen by ``OPENROUTER_TRANSCRIBE_MODEL`` (one-line env
+swap). The inbound ``model`` form field (Vexa always sends ``whisper-1``) is ignored.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -25,17 +26,20 @@ logging.basicConfig(
     level=getattr(logging, (settings.log_level or "INFO").upper(), logging.INFO),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger("azure_transcriber")
+logger = logging.getLogger("transcriber")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.http = httpx.AsyncClient()
+    app.state.http = httpx.AsyncClient(
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        timeout=settings.request_timeout_s,
+    )
     app.state.provider = None
     app.state.provider_error = None
     try:
         app.state.provider = build_provider(settings, app.state.http)
-        logger.info("azure-transcriber ready: model=%s api_kind=%s",
+        logger.info("transcriber ready: model=%s api_kind=%s",
                     app.state.provider.model_id, app.state.provider.capability.api_kind)
     except Exception as e:  # keep /health serving so the error is visible
         app.state.provider_error = str(e)
@@ -44,7 +48,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title="azure-transcriber", lifespan=lifespan)
+app = FastAPI(title="transcriber", lifespan=lifespan)
 
 
 def _auth_error(authorization: Optional[str], x_api_key: Optional[str]) -> Optional[JSONResponse]:
@@ -64,7 +68,7 @@ def _auth_error(authorization: Optional[str], x_api_key: Optional[str]) -> Optio
 @app.get("/health")
 async def health():
     # Liveness: 200 whenever the process is up. `ready` reflects whether the
-    # selected provider initialised (e.g. Azure creds present). A misconfigured
+    # selected provider initialised (e.g. OpenRouter creds present). A misconfigured
     # backend reports ready=false rather than crash-looping the container.
     ready = app.state.provider is not None
     body = {
@@ -82,12 +86,11 @@ async def health():
 @app.get("/")
 async def root():
     return {
-        "service": "azure-transcriber",
+        "service": "transcriber",
         "active_model": settings.transcriber_model,
         "endpoints": {"transcribe": "/v1/audio/transcriptions", "health": "/health"},
         "capabilities": {
-            m: {"api_kind": c.api_kind, "streams": c.streams,
-                "diarizes": c.diarizes, "word_timestamps": c.word_timestamps}
+            m: {"api_kind": c.api_kind, "word_timestamps": c.word_timestamps}
             for m, c in CAPABILITIES.items()
         },
     }
@@ -101,11 +104,10 @@ async def transcribe(
     timestamp_granularities: str = Form("segment"),
     language: Optional[str] = Form(None),
     prompt: Optional[str] = Form(None),
+    # accepted for OpenAI-contract compatibility with Vexa's bot; the OpenRouter
+    # backend ignores VAD tuning fields
     max_speech_duration_s: Optional[str] = Form(None),
     min_silence_duration_ms: Optional[str] = Form(None),
-    transcription_tier: Optional[str] = Form(None),
-    temperature: Optional[str] = Form(None),
-    task: str = Form("transcribe"),
     authorization: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
@@ -120,7 +122,6 @@ async def transcribe(
 
     audio = await file.read()
     lang = None if (language in (None, "", "auto")) else language
-    want_words = "word" in (timestamp_granularities or "")
     try:
         result = await app.state.provider.transcribe(
             audio,
@@ -128,29 +129,18 @@ async def transcribe(
             content_type=file.content_type or "audio/wav",
             language=lang,
             prompt=prompt,
-            max_speech_duration_s=_to_float(max_speech_duration_s),
-            min_silence_duration_ms=_to_int(min_silence_duration_ms),
-            want_word_timestamps=want_words,
         )
         return JSONResponse(result)
     except ProviderError as e:
         logger.warning("transcription failed: %s", e)
         headers = {"Retry-After": str(e.retry_after)} if e.retry_after else None
         return JSONResponse({"detail": str(e)}, status_code=e.status_code, headers=headers)
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        logger.warning("transcription timed out")
+        return JSONResponse(
+            {"detail": "upstream timeout"},
+            status_code=503, headers={"Retry-After": str(settings.busy_retry_after_s)},
+        )
     except Exception as e:  # never kill the meeting
         logger.exception("unexpected transcription error")
         return JSONResponse({"detail": f"internal error: {e}"}, status_code=500)
-
-
-def _to_float(v: Optional[str]) -> Optional[float]:
-    try:
-        return float(v) if v not in (None, "") else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_int(v: Optional[str]) -> Optional[int]:
-    try:
-        return int(v) if v not in (None, "") else None
-    except (TypeError, ValueError):
-        return None

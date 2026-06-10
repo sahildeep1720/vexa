@@ -2,8 +2,9 @@
 
 Flow: Vexa POST_MEETING_HOOKS delivers a `meeting.completed` envelope -> we ACK
 fast (202) -> in the background we fetch the transcript from meeting-api's internal
-endpoint, group it by speaker, extract yesterday/today/blockers with Azure GPT-5.5
-(strict JSON), and push to the (stubbed) Kanban API. Idempotent on event_id.
+endpoint, group it by speaker, extract yesterday/today/blockers with OpenRouter
+gpt-5.5 (strict JSON, in English), and push to the (stubbed) Kanban API. Idempotent
+on event_id.
 """
 from __future__ import annotations
 
@@ -35,15 +36,17 @@ _MAX_SEEN = 2048
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.http = httpx.AsyncClient()
+    app.state.http = httpx.AsyncClient(
+        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        timeout=settings.request_timeout_s,
+    )
     app.state.vexa = VexaClient(settings.meeting_api_internal_url, settings.internal_api_secret,
                                 app.state.http)
     app.state.extractor = StandupExtractor(settings, app.state.http)
     app.state.kanban = KanbanClient(settings.kanban_api_url, settings.kanban_api_key, app.state.http)
     app.state.seen_events = deque(maxlen=_MAX_SEEN)
     app.state.seen_set = set()
-    logger.info("standup-extractor ready: model_mode=%s deployment=%s",
-                settings.model_mode, settings.azure_openai_deployment)
+    logger.info("standup-extractor ready: model=%s", settings.openrouter_model)
     yield
     await app.state.http.aclose()
 
@@ -64,7 +67,7 @@ def _already_processed(app: FastAPI, event_id: str) -> bool:
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "model_mode": settings.model_mode}
+    return {"status": "healthy", "model": settings.openrouter_model}
 
 
 @app.post("/hooks/meeting-completed")

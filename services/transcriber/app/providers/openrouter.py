@@ -19,10 +19,10 @@ import wave
 from typing import Any, Dict, Optional
 
 from .. import schema
-from .azure_openai_rest import post_with_retry
 from .base import ProviderError, TranscriptionProvider
+from .http import post_with_retry
 
-logger = logging.getLogger("azure_transcriber.openrouter")
+logger = logging.getLogger("transcriber.openrouter")
 
 
 class OpenRouterTranscriptionProvider(TranscriptionProvider):
@@ -52,8 +52,7 @@ class OpenRouterTranscriptionProvider(TranscriptionProvider):
         return h
 
     async def transcribe(self, audio, *, filename="audio.wav", content_type="audio/wav",
-                         language=None, prompt=None, max_speech_duration_s=None,
-                         min_silence_duration_ms=None, want_word_timestamps=True) -> Dict[str, Any]:
+                         language=None, prompt=None) -> Dict[str, Any]:
         body: Dict[str, Any] = {
             "model": self.slug,
             "input_audio": {
