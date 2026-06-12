@@ -124,8 +124,85 @@ ops/schedule-standup.sh list
 
 - `MEET_CODE` = the `xxx-xxxx-xxx` from `https://meet.google.com/xxx-xxxx-xxx`
 - `--time` is local time (24h); `--tz` your timezone; runs Mon–Fri
-- Admit **"Vexa"** when it knocks (or enable Quick access in the meeting for no-admit)
+- Admit **"Vexa"** when it knocks, or set the meeting to **Open** access for no-admit (see §10)
 - Change schedule: `ops/schedule-standup.sh cancel-meeting MEET_CODE` then `add` again
+
+## 10. Meeting access type (Open vs Trusted)
+
+Google Meet → **Host controls → Meeting access** decides whether the bot can join:
+
+- **Open** — anonymous joiners are allowed → the default anonymous bot joins directly, no
+  sign-in, hands-off. Simplest; use this unless policy forbids a shareable link. Nothing else
+  to do.
+- **Trusted** (or **Restricted**) — only **signed-in** Google accounts may join → an anonymous
+  bot is thrown out (`You can't join this meeting`). The bot must join **signed in**
+  (authenticated mode). Set it up once below.
+
+### Trusted access — sign the bot in (one-time)
+
+Use a **dedicated** Google account for the bot, ideally in the **same Workspace org** as the
+meeting (so "Trusted" accepts it cleanly). The signed-in profile is saved in MinIO and reused by
+every future authenticated bot (survives restarts; lasts weeks–months).
+
+**1. Tunnel to the API gateway** (from your laptop):
+
+```bash
+ssh -L 8056:localhost:8056 user@VM_PUBLIC_IP
+```
+
+**2. Start a browser session and capture its token** (on the VM):
+
+```bash
+KEY=$(grep '^VEXA_API_KEY=' .env | cut -d= -f2)
+curl -s -X POST localhost:8056/bots -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"mode":"browser_session"}' | tee /tmp/bs.json
+TOKEN=$(python3 -c "import json;print(json.load(open('/tmp/bs.json'))['data']['session_token'])")
+echo "$TOKEN"
+```
+
+**3. Open the bot's browser and log in** — in your **laptop** browser (through the tunnel):
+
+```
+http://localhost:8056/b/<TOKEN>
+```
+
+- Click the address bar, go to **accounts.google.com**, sign in with the bot account.
+- Complete 2FA if prompted (once). Tick **"Stay signed in"**.
+
+**4. Save the signed-in profile to MinIO:**
+
+```bash
+curl -s -X POST "localhost:8056/b/$TOKEN/save" -H "X-API-Key: $KEY"   # {"message":"Storage saved successfully"}
+```
+
+**5. Stop the browser session** (optional; it idles out in 1h):
+
+```bash
+docker ps --format '{{.Names}}' | grep browser-session | xargs -r docker stop
+```
+
+### Send the bot signed in (`authenticated`)
+
+One-off:
+
+```bash
+curl -s -X POST localhost:8056/bots -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"platform":"google_meet","native_meeting_id":"MEET_CODE","bot_name":"Vexa","authenticated":true}'
+```
+
+Daily auto-join (signed in):
+
+```bash
+ops/schedule-standup.sh add MEET_CODE --time 10:30 --tz Asia/Kolkata --authenticated
+```
+
+Notes:
+
+- The bot joins **as that Google account** — it appears in the meeting under that name.
+- Re-do the login only if Google later signs the account out (cookies persist in MinIO and
+  survive `ops/stack.sh down`/`up`).
+- If the bot account is **outside** the meeting's org, "Trusted" may still make it knock →
+  admit **"Vexa"** once, or add the account to the org / calendar invite so it's let in directly.
 
 ## Manage
 
