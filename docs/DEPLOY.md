@@ -5,7 +5,7 @@
 - Ubuntu 22.04 / 24.04 LTS — **x86_64** (not ARM)
 - 4 vCPU · 8 GB RAM · 100 GB SSD
 - Public IP, outbound internet
-- Inbound (opened in §8): `22` (SSH), `3001` (dashboard), `8056` (API)
+- Inbound: `22` (SSH) only — reach the dashboard via SSH tunnel (§8)
 
 ## 2. GitHub deploy key
 
@@ -78,25 +78,42 @@ curl -s localhost:8090/health
 grep '^VEXA_API_KEY=' .env
 ```
 
-## 8. Firewall + dashboard
+## 8. Firewall + dashboard access
+
+The dashboard has **no password** (direct login) — do **not** open `3001` to the public.
+
+Open only SSH:
 
 ```bash
-sudo ufw allow 22       # SSH
-sudo ufw allow 3001     # dashboard
-sudo ufw allow 8056     # API (dashboard's browser calls this)
+sudo ufw allow 22
 sudo ufw enable
 sudo ufw status
 ```
 
-Also allow `22`, `3001`, `8056` in your cloud provider's **security group / firewall** (ufw alone won't help if the cloud firewall blocks them).
+(also allow `22` in your cloud provider's **security group**)
 
-Dashboard runs only in the **full** stack:
+Start the full stack (dashboard is not in `up-lean`):
 
 ```bash
 ops/stack.sh up    # full stack (adds dashboard + mcp)
 ```
 
-Open `http://<VM_PUBLIC_IP>:3001` → log in with `admin@vexa.ai` (no password).
+**Access the dashboard via SSH tunnel** (recommended — nothing public). From your laptop:
+
+```bash
+ssh -L 3001:localhost:3001 -L 8056:localhost:8056 user@VM_PUBLIC_IP
+```
+
+Then open `http://localhost:3001` → log in with `admin@vexa.ai` (no password).
+
+**Alternative — whitelist your laptop IP** instead of the tunnel. Get it with `curl ifconfig.me`, then:
+
+```bash
+sudo ufw allow from YOUR_IP to any port 3001 proto tcp
+sudo ufw allow from YOUR_IP to any port 8056 proto tcp
+```
+
+(also add `YOUR_IP` + ports `3001`/`8056` in the cloud security group; re-run if your IP changes)
 
 ## 9. Daily auto-join (same meeting, every weekday)
 
