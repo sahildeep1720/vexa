@@ -1124,6 +1124,16 @@ async def request_bot(
         bot_config["s3Bucket"] = s3_bucket
         bot_config["s3AccessKey"] = os.environ.get("MINIO_ACCESS_KEY", "")
         bot_config["s3SecretKey"] = os.environ.get("MINIO_SECRET_KEY", "")
+    # OpenRouter overlay (headless-server fix): the bot defaults to "humanized"
+    # OS-level/XTEST clicking for Google Meet. On a headless server that misfires —
+    # clickHandle() reports success without verifying the button was actually
+    # pressed, so it never falls back to synthetic, and the bot never clicks
+    # "Ask to join" (you have to click it manually via VNC). Force synthetic DOM
+    # clicks by default; set BOT_UI_INTERACTION_MODE=humanized in .env to restore
+    # upstream behavior.
+    _ui_mode = os.getenv("BOT_UI_INTERACTION_MODE", "synthetic")
+    if _ui_mode:
+        bot_config["uiInteractionMode"] = _ui_mode
     # Remove None values
     bot_config = {k: v for k, v in bot_config.items() if v is not None}
 
