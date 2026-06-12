@@ -5,7 +5,7 @@
 - Ubuntu 22.04 / 24.04 LTS — **x86_64** (not ARM)
 - 4 vCPU · 8 GB RAM · 100 GB SSD
 - Public IP, outbound internet
-- Inbound: open `22` (SSH). Optional: `8056` (API), `3001` (dashboard)
+- Inbound (opened in §8): `22` (SSH), `3001` (dashboard), `8056` (API)
 
 ## 2. GitHub deploy key
 
@@ -78,7 +78,27 @@ curl -s localhost:8090/health
 grep '^VEXA_API_KEY=' .env
 ```
 
-## 8. Daily auto-join (same meeting, every weekday)
+## 8. Firewall + dashboard
+
+```bash
+sudo ufw allow 22       # SSH
+sudo ufw allow 3001     # dashboard
+sudo ufw allow 8056     # API (dashboard's browser calls this)
+sudo ufw enable
+sudo ufw status
+```
+
+Also allow `22`, `3001`, `8056` in your cloud provider's **security group / firewall** (ufw alone won't help if the cloud firewall blocks them).
+
+Dashboard runs only in the **full** stack:
+
+```bash
+ops/stack.sh up    # full stack (adds dashboard + mcp)
+```
+
+Open `http://<VM_PUBLIC_IP>:3001` → log in with `admin@vexa.ai` (no password).
+
+## 9. Daily auto-join (same meeting, every weekday)
 
 ```bash
 ops/schedule-standup.sh add MEET_CODE --time 10:30 --tz Asia/Kolkata
