@@ -48,7 +48,7 @@ cat .env.openrouter.example >> .env
   echo "OPENROUTER_TRANSCRIBE_MODEL=openai/gpt-4o-transcribe"
   echo "OPENROUTER_CHAT_MODEL=openai/gpt-5.5"
   echo "IMAGE_TAG=latest"
-  echo "DOCKER_GID=$(getent group docker | cut -d: -f3)"
+  echo "DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)"
   echo "TRANSCRIPTION_SERVICE_TOKEN=$(openssl rand -hex 24)"
   echo "INTERNAL_API_SECRET=$(openssl rand -hex 24)"
   echo "ADMIN_TOKEN=$(openssl rand -hex 24)"
@@ -141,3 +141,18 @@ ops/stack.sh down                 # stop all
 ```bash
 cd vexa && git pull && ops/stack.sh build && ops/stack.sh up-lean
 ```
+
+## Troubleshooting
+
+**`runtime-api` crash-loops with `PermissionError(13)` on `/var/run/docker.sock`** — `DOCKER_GID`
+doesn't match the host's docker group (common if a Mac `.env` with `DOCKER_GID=0` was copied over):
+
+```bash
+GID=$(stat -c '%g' /var/run/docker.sock)
+grep -q '^DOCKER_GID=' .env && sed -i "s/^DOCKER_GID=.*/DOCKER_GID=$GID/" .env || echo "DOCKER_GID=$GID" >> .env
+ops/stack.sh up
+```
+
+**`permission denied` running `docker`/`ops/stack.sh`** — your user isn't in the `docker` group
+yet. Don't use `sudo`; fix the group: `sudo usermod -aG docker $USER`, then **log out and back in**,
+then `docker ps` should work with no sudo.
