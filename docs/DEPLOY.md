@@ -61,8 +61,7 @@ nano .env    # set OPENROUTER_API_KEY to your real sk-or-... key
 ## 6. Build & start
 
 ```bash
-ops/stack.sh build
-docker pull "$(grep '^BROWSER_IMAGE=' .env | cut -d= -f2)"   # bot image runtime-api spawns (not a compose service)
+ops/stack.sh build          # builds our images + pulls the bot image
 ops/stack.sh up-lean
 make -C deploy/compose init-db
 make -C deploy/compose setup-api-key

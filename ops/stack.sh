@@ -84,6 +84,11 @@ case "$cmd" in
     ;;
   build)
     "${COMPOSE[@]}" build "$@"
+    # Also pull the bot image runtime-api spawns at runtime — it is NOT a compose
+    # service, so `compose build`/`up` never fetches it. Without this a fresh host
+    # 404s on /containers/create when a meeting starts.
+    BOT_IMG="$(grep -E '^BROWSER_IMAGE=' "$ROOT/.env" 2>/dev/null | tail -1 | cut -d= -f2)"
+    docker pull "${BOT_IMG:-vexaai/vexa-bot:latest}"
     ;;
   config)
     "${COMPOSE[@]}" config "$@"
