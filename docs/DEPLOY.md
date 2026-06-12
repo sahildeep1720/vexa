@@ -62,6 +62,7 @@ nano .env    # set OPENROUTER_API_KEY to your real sk-or-... key
 
 ```bash
 ops/stack.sh build
+docker pull "$(grep '^BROWSER_IMAGE=' .env | cut -d= -f2)"   # bot image runtime-api spawns (not a compose service)
 ops/stack.sh up-lean
 make -C deploy/compose init-db
 make -C deploy/compose setup-api-key
@@ -156,3 +157,10 @@ ops/stack.sh up
 **`permission denied` running `docker`/`ops/stack.sh`** — your user isn't in the `docker` group
 yet. Don't use `sudo`; fix the group: `sudo usermod -aG docker $USER`, then **log out and back in**,
 then `docker ps` should work with no sudo.
+
+**Join fails: runtime-api `404 ... /containers/create` (no such image)** — the bot image isn't
+pulled (runtime-api spawns it at runtime; Compose doesn't pull it):
+
+```bash
+docker pull "$(grep '^BROWSER_IMAGE=' .env | cut -d= -f2)"
+```
