@@ -35,6 +35,16 @@ class Settings:
     openrouter_referer: Optional[str] = None   # optional app-attribution header
     openrouter_title: Optional[str] = None     # optional app-attribution header
 
+    # ---- Azure OpenAI STT (gpt-4o-transcribe family) — the timestamp-capable
+    # backend. Returns word + segment timestamps, which OpenRouter STT cannot, so
+    # the bot can attribute speech to the right speaker. Select with
+    # TRANSCRIBER_MODEL=gpt-4o-transcribe (or gpt-4o-mini-transcribe / whisper-1).
+    azure_openai_endpoint: Optional[str] = None        # https://{resource}.openai.azure.com
+    azure_openai_api_key: Optional[str] = None
+    azure_openai_api_version: str = "2025-04-01-preview"
+    # On Azure the request 'model' must be the DEPLOYMENT name; defaults to the model id.
+    azure_openai_deployment: Optional[str] = None
+
     # ---- Inbound (what Vexa's bot sends us) ----
     inbound_auth_token: Optional[str] = None           # if set, require matching Bearer/X-API-Key
 
@@ -58,6 +68,10 @@ def load_settings() -> Settings:
         openrouter_transcribe_model=_get("OPENROUTER_TRANSCRIBE_MODEL", "openai/gpt-4o-transcribe"),
         openrouter_referer=_get("OPENROUTER_REFERER"),
         openrouter_title=_get("OPENROUTER_TITLE"),
+        azure_openai_endpoint=_get("AZURE_OPENAI_ENDPOINT"),
+        azure_openai_api_key=_get("AZURE_OPENAI_API_KEY"),
+        azure_openai_api_version=_get("AZURE_OPENAI_API_VERSION", "2025-04-01-preview"),
+        azure_openai_deployment=_get("AZURE_OPENAI_DEPLOYMENT"),
         # reuse the same token the bot already carries, unless overridden
         inbound_auth_token=_get("INBOUND_AUTH_TOKEN") or _get("TRANSCRIPTION_SERVICE_TOKEN"),
         request_timeout_s=float(_get("REQUEST_TIMEOUT_S", "25") or "25"),

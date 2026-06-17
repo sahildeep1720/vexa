@@ -27,3 +27,23 @@ def test_openrouter_empty_text_no_segment():
                                       default_language_probability=1.0)
     assert out["text"] == ""
     assert out["segments"] == []
+
+
+def test_openai_verbose_preserves_words():
+    data = {
+        "text": "hello world", "language": "en", "duration": 3.0,
+        "segments": [{
+            "start": 0.0, "end": 3.0, "text": "hello world",
+            "words": [
+                {"word": "hello", "start": 0.0, "end": 1.0, "probability": 0.9},
+                {"word": "world", "start": 1.0, "end": 2.0},   # missing probability
+            ],
+        }],
+    }
+    out = schema.from_openai_verbose(data, fallback_language=None, default_language_probability=1.0)
+    assert out["text"] == "hello world"
+    assert out["language"] == "en"
+    assert len(out["segments"]) == 1
+    words = out["segments"][0]["words"]
+    assert [w["word"] for w in words] == ["hello", "world"]
+    assert words[1]["probability"] == 1.0   # missing probability defaults to 1.0

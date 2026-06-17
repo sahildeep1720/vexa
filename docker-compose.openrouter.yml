@@ -42,6 +42,12 @@ services:
       - OPENROUTER_TRANSCRIBE_MODEL=${OPENROUTER_TRANSCRIBE_MODEL:-openai/gpt-4o-transcribe}
       - OPENROUTER_REFERER=${OPENROUTER_REFERER:-}
       - OPENROUTER_TITLE=${OPENROUTER_TITLE:-}
+      # Azure OpenAI STT (word + segment timestamps -> accurate speaker attribution).
+      # Set TRANSCRIBER_MODEL=gpt-4o-transcribe + these to use it instead of OpenRouter STT.
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2025-04-01-preview}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-}
       # Inbound auth: falls back to the same token the bot already carries.
       - INBOUND_AUTH_TOKEN=${INBOUND_AUTH_TOKEN:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}

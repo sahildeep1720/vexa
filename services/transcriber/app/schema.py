@@ -69,3 +69,46 @@ def from_openrouter_text(text: Optional[str], *, duration: float, fallback_langu
         segments = [{"start": 0.0, "end": float(duration or 0.0), "text": text}]
     return _envelope(text, normalize_language(None, fallback_language),
                      default_language_probability, duration, segments)
+
+
+def from_openai_verbose(data: Dict[str, Any], *, fallback_language: Optional[str],
+                        default_language_probability: float) -> Dict[str, Any]:
+    """OpenAI/Azure gpt-4o-transcribe verbose_json -> Vexa, preserving word timestamps.
+
+    Unlike OpenRouter STT, this backend returns per-segment + per-word timestamps,
+    which the bot uses for accurate per-speaker attribution when multiple mics are open.
+    """
+    segments: List[Dict[str, Any]] = []
+    for s in data.get("segments") or []:
+        seg: Dict[str, Any] = {
+            "start": float(s.get("start") or 0.0),
+            "end": float(s.get("end") or 0.0),
+            "text": s.get("text") or "",
+        }
+        for k in ("avg_logprob", "no_speech_prob", "compression_ratio"):
+            if s.get(k) is not None:
+                seg[k] = s[k]
+        words = s.get("words")
+        if words:
+            seg["words"] = [
+                {
+                    "word": w.get("word", ""),
+                    "start": float(w.get("start") or 0.0),
+                    "end": float(w.get("end") or 0.0),
+                    "probability": float(w.get("probability") if w.get("probability") is not None else 1.0),
+                }
+                for w in words
+            ]
+        segments.append(seg)
+
+    duration = data.get("duration")
+    if duration is None and segments:
+        duration = segments[-1]["end"]
+    text = data.get("text")
+    if not text and segments:
+        text = " ".join(seg["text"].strip() for seg in segments).strip()
+    lang_prob = data.get("language_probability")
+    if lang_prob is None:
+        lang_prob = default_language_probability
+    return _envelope(text, normalize_language(data.get("language"), fallback_language),
+                     lang_prob, duration, segments)
