@@ -47,3 +47,24 @@ def test_openai_verbose_preserves_words():
     words = out["segments"][0]["words"]
     assert [w["word"] for w in words] == ["hello", "world"]
     assert words[1]["probability"] == 1.0   # missing probability defaults to 1.0
+
+
+def test_openai_verbose_distributes_top_level_words():
+    # whisper returns the word list at the TOP level (not inside segments)
+    data = {
+        "language": "en", "duration": 4.0, "text": "hi there friend",
+        "segments": [
+            {"start": 0.0, "end": 2.0, "text": "hi there"},
+            {"start": 2.0, "end": 4.0, "text": "friend"},
+        ],
+        "words": [
+            {"word": "hi", "start": 0.0, "end": 0.5},
+            {"word": "there", "start": 0.5, "end": 1.2},
+            {"word": "friend", "start": 2.1, "end": 2.9},
+        ],
+    }
+    out = schema.from_openai_verbose(data, fallback_language=None, default_language_probability=1.0)
+    segs = out["segments"]
+    assert [w["word"] for w in segs[0]["words"]] == ["hi", "there"]
+    assert [w["word"] for w in segs[1]["words"]] == ["friend"]
+    assert segs[0]["words"][0]["probability"] == 1.0   # whisper words have no probability -> 1.0

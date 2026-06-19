@@ -73,13 +73,18 @@ def from_openrouter_text(text: Optional[str], *, duration: float, fallback_langu
 
 def from_openai_verbose(data: Dict[str, Any], *, fallback_language: Optional[str],
                         default_language_probability: float) -> Dict[str, Any]:
-    """OpenAI/Azure gpt-4o-transcribe verbose_json -> Vexa, preserving word timestamps.
+    """OpenAI/Azure gpt-4o-transcribe / whisper verbose_json -> Vexa, with word timestamps.
 
-    Unlike OpenRouter STT, this backend returns per-segment + per-word timestamps,
-    which the bot uses for accurate per-speaker attribution when multiple mics are open.
+    Returns per-segment + per-word timestamps for accurate per-speaker attribution.
+    NOTE: whisper returns the word list at the TOP LEVEL (not inside each segment),
+    so we distribute those words into their segments by time — the bot reads
+    per-segment ``words``.
     """
+    raw_segments = data.get("segments") or []
+    top_words = data.get("words") or []
+    wi = 0
     segments: List[Dict[str, Any]] = []
-    for s in data.get("segments") or []:
+    for idx, s in enumerate(raw_segments):
         seg: Dict[str, Any] = {
             "start": float(s.get("start") or 0.0),
             "end": float(s.get("end") or 0.0),
@@ -89,6 +94,14 @@ def from_openai_verbose(data: Dict[str, Any], *, fallback_language: Optional[str
             if s.get(k) is not None:
                 seg[k] = s[k]
         words = s.get("words")
+        if not words and top_words:
+            # whisper words are top-level; assign each to its segment by start time
+            # (last segment absorbs the remainder so nothing is dropped).
+            is_last = idx == len(raw_segments) - 1
+            words = []
+            while wi < len(top_words) and (is_last or float(top_words[wi].get("start") or 0.0) < seg["end"]):
+                words.append(top_words[wi])
+                wi += 1
         if words:
             seg["words"] = [
                 {
