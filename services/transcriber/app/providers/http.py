@@ -26,7 +26,14 @@ async def post_with_retry(http: httpx.AsyncClient, url: str, *, headers, setting
                 resp = await http.post(url, headers=headers, json=json_body,
                                        timeout=settings.request_timeout_s)
             else:
-                resp = await http.post(url, headers=headers, data=data, files=files,
+                # httpx 0.28 raises "Attempted to send a sync request with an
+                # AsyncClient instance" when `data` (form fields) and `files` are
+                # passed together. Merge the form fields into the files list as
+                # (name, (None, value)) parts — a pure multipart that works async.
+                parts = list(files.items()) if files else []
+                for k, v in (data or []):
+                    parts.append((k, (None, v)))
+                resp = await http.post(url, headers=headers, files=parts,
                                        timeout=settings.request_timeout_s)
         except (httpx.TimeoutException, httpx.TransportError) as e:
             if attempt >= settings.max_retries:
